@@ -17,22 +17,28 @@
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.15.0/Recharts.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><div style="padding:40px;text-align:center;color:#525252;font-family:Helvetica">Loading tracker...</div></div>
+<script>window.onerror=function(m){document.getElementById('root').innerHTML='<div style="padding:40px;text-align:center;color:#ef4444;font-family:Helvetica"><h2>Error Loading</h2><p>'+m+'</p><p style="color:#525252;margin-top:12px">Try refreshing the page.</p></div>';}</script>
 <script type="text/babel">
 const { useState, useEffect, useCallback } = React;
-const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, LineChart, Line, Legend } = Recharts;
-
+ 
+// Recharts with fallback
+const RC = window.Recharts || {};
+const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, LineChart, Line, Legend } = RC;
+const hasCharts = !!window.Recharts;
+ 
 const CURRENCIES = {
   INR: { symbol: "₹", rate: 1 },
   GBP: { symbol: "£", rate: 0.0091 },
   USD: { symbol: "$", rate: 0.012 },
   EUR: { symbol: "€", rate: 0.011 },
 };
-
+ 
 const KEYS = {
   products: "dm-products",
   dailyLog: "dm-dailylog",
@@ -40,7 +46,7 @@ const KEYS = {
   currency: "dm-currency",
   rates: "dm-rates",
 };
-
+ 
 const load = (key, fallback) => {
   try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
   catch { return fallback; }
@@ -48,7 +54,7 @@ const load = (key, fallback) => {
 const save = (key, val) => {
   try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
 };
-
+ 
 const fmt = (num, cur) => {
   const c = CURRENCIES[cur] || CURRENCIES.INR;
   const converted = num * c.rate;
@@ -61,11 +67,11 @@ const fmtShort = (num, cur) => {
   if (Math.abs(v) >= 1000) return c.symbol + (v / 1000).toFixed(1) + "K";
   return c.symbol + v.toFixed(0);
 };
-
+ 
 const defaultProducts = [
   { id: "p1", name: "Faux Leather Jacket", sku: "DM-FLJ-001", sellingPriceGBP: 78, cogsINR: 3300, active: true },
 ];
-
+ 
 function App() {
   const [tab, setTab] = useState("products");
   const [currency, setCurrency] = useState(load(KEYS.currency, "INR"));
@@ -73,12 +79,12 @@ function App() {
   const [dailyLog, setDailyLog] = useState(load(KEYS.dailyLog, []));
   const [goal, setGoal] = useState(load(KEYS.goal, { targetINR: 500000, targetDate: "2026-06-21", label: "Move-out fund" }));
   const [rates, setRates] = useState(load(KEYS.rates, { GBP_INR: 110, USD_INR: 83, EUR_INR: 90 }));
-
+ 
   const [ratesStatus, setRatesStatus] = useState(load("dm-rates-updated", "Never"));
   const [ratesLoading, setRatesLoading] = useState(false);
-
+ 
   useEffect(() => { CURRENCIES.GBP.rate = 1 / rates.GBP_INR; CURRENCIES.USD.rate = 1 / rates.USD_INR; CURRENCIES.EUR.rate = 1 / rates.EUR_INR; }, [rates]);
-
+ 
   const fetchLiveRates = useCallback(async () => {
     setRatesLoading(true);
     try {
@@ -102,7 +108,7 @@ function App() {
     }
     setRatesLoading(false);
   }, []);
-
+ 
   // Auto-fetch rates on load (max once per 6 hours)
   useEffect(() => {
     const lastFetch = load("dm-rates-timestamp", 0);
@@ -111,15 +117,15 @@ function App() {
       fetchLiveRates().then(() => save("dm-rates-timestamp", JSON.stringify(Date.now())));
     }
   }, []);
-
+ 
   const saveProducts = (p) => { setProducts(p); save(KEYS.products, p); };
   const saveLog = (l) => { setDailyLog(l); save(KEYS.dailyLog, l); };
   const saveGoal = (g) => { setGoal(g); save(KEYS.goal, g); };
   const saveCurrency = (c) => { setCurrency(c); save(KEYS.currency, c); };
   const saveRates = (r) => { setRates(r); save(KEYS.rates, r); };
-
+ 
   const toINR = (gbp) => gbp * rates.GBP_INR;
-
+ 
   const computeDay = (entry) => {
     let totalRevINR = 0, totalCOGS = 0, totalShipping = 0, totalUnits = 0;
     const prodBreakdown = [];
@@ -138,7 +144,7 @@ function App() {
     const realROAS = entry.adSpendINR > 0 ? grossProfit / entry.adSpendINR : 0;
     return { totalRevINR, totalCOGS, totalShipping, grossProfit, netProfit, trueROAS, realROAS, totalUnits, prodBreakdown, adSpend: entry.adSpendINR || 0 };
   };
-
+ 
   const S = {
     page: { padding: "20px 16px", maxWidth: 800, margin: "0 auto" },
     card: { background: "#111", border: "1px solid #1f1f1f", borderRadius: 8, padding: 16, marginBottom: 12 },
@@ -150,7 +156,7 @@ function App() {
     sub: { fontSize: 11, color: "#525252", marginTop: 2 },
     g: "#22c55e", r: "#ef4444", y: "#f59e0b", b: "#3b82f6",
   };
-
+ 
   // ===== PRODUCTS =====
   const ProductsTab = () => {
     const [editing, setEditing] = useState(null);
@@ -165,7 +171,7 @@ function App() {
       setEditing(null);
     };
     const remove = (id) => { if (confirm("Delete this product?")) saveProducts(products.filter(p => p.id !== id)); };
-
+ 
     return React.createElement("div", { className: "fade-in" },
       React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } },
         React.createElement("div", { style: { fontSize: 11, letterSpacing: 2, color: "#737373", textTransform: "uppercase" } }, products.length + " Products"),
@@ -225,12 +231,12 @@ function App() {
       })
     );
   };
-
+ 
   // ===== DAILY LOG =====
   const DailyLogTab = () => {
     const [showForm, setShowForm] = useState(false);
     const [form, setForm] = useState({ date: new Date().toISOString().split("T")[0], adSpendINR: "", sales: [] });
-
+ 
     const addSale = () => setForm({ ...form, sales: [...form.sales, { productId: products[0]?.id || "", qty: 1, shippingINR: 0 }] });
     const updateSale = (idx, field, val) => {
       const sales = [...form.sales];
@@ -249,13 +255,13 @@ function App() {
       setShowForm(true);
       setForm({ date: new Date().toISOString().split("T")[0], adSpendINR: "", sales: [{ productId: products[0]?.id || "", qty: 1, shippingINR: 0 }] });
     };
-
+ 
     const quickDates = [
       { label: "Today", offset: 0 }, { label: "Yesterday", offset: 1 },
       { label: "2 days ago", offset: 2 }, { label: "3 days ago", offset: 3 },
       { label: "1 week ago", offset: 7 },
     ];
-
+ 
     return React.createElement("div", { className: "fade-in" },
       React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } },
         React.createElement("div", { style: { fontSize: 11, letterSpacing: 2, color: "#737373", textTransform: "uppercase" } }, dailyLog.length + " Entries"),
@@ -337,7 +343,7 @@ function App() {
       dailyLog.length === 0 && !showForm && React.createElement("div", { style: { ...S.card, textAlign: "center", padding: 40, color: "#525252" } }, "No entries yet. Start logging daily to track your real profit.")
     );
   };
-
+ 
   // ===== BREAK-EVEN =====
   const BreakEvenTab = () => {
     const [sel, setSel] = useState(products[0]?.id || "");
@@ -345,22 +351,22 @@ function App() {
     const [avgShip, setAvgShip] = useState("250");
     const [dailySales, setDailySales] = useState("3");
     const [targetProfit, setTargetProfit] = useState("500000");
-
+ 
     const prod = products.find(p => p.id === sel);
     if (!prod) return React.createElement("div", { style: { ...S.card, textAlign: "center", color: "#525252" } }, "Add products first.");
-
+ 
     const revINR = toINR(prod.sellingPriceGBP);
     const ppu = revINR - prod.cogsINR - (parseFloat(avgShip) || 0);
     const ads = parseFloat(adSpend) || 0;
     const ds = parseFloat(dailySales) || 0;
     const tp = parseFloat(targetProfit) || 0;
-
+ 
     const unitsBE = ppu > 0 ? Math.ceil(ads / ppu) : Infinity;
     const maxCPA = ppu;
     const maxDailyAd = ppu * ds;
     const monthlyProfit = (ppu * ds * 30) - (ads * 30);
     const dailyNeeded = ppu > 0 ? Math.ceil((tp + ads * 30) / (ppu * 30)) : Infinity;
-
+ 
     return React.createElement("div", { className: "fade-in" },
       React.createElement("div", { style: S.card },
         React.createElement("div", { style: { fontSize: 11, color: S.b, fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, "Calculator Inputs"),
@@ -405,13 +411,13 @@ function App() {
       )
     );
   };
-
+ 
   // ===== OVERVIEW =====
   const OverviewTab = () => {
     let totalRev = 0, totalCOGS = 0, totalShip = 0, totalAdSpend = 0, totalUnits = 0;
     const dailyData = [];
     const productTotals = {};
-
+ 
     [...dailyLog].sort((a, b) => a.date.localeCompare(b.date)).forEach(entry => {
       const d = computeDay(entry);
       totalRev += d.totalRevINR; totalCOGS += d.totalCOGS; totalShip += d.totalShipping;
@@ -422,7 +428,7 @@ function App() {
         productTotals[pb.id].units += pb.qty; productTotals[pb.id].revenue += pb.revINR; productTotals[pb.id].profit += pb.grossProfit;
       });
     });
-
+ 
     const grossProfit = totalRev - totalCOGS - totalShip;
     const netProfit = grossProfit - totalAdSpend;
     const trueROAS = totalAdSpend > 0 ? totalRev / totalAdSpend : 0;
@@ -433,13 +439,13 @@ function App() {
     const projMonthly = avgDaily * 30;
     const goalProg = goal.targetINR > 0 ? Math.min((projMonthly / goal.targetINR) * 100, 100) : 0;
     const daysLeft = Math.max(0, Math.ceil((new Date(goal.targetDate) - new Date()) / 86400000));
-
+ 
     const pieData = Object.values(productTotals).map(p => ({ name: p.name, value: Math.round(p.revenue) }));
     const PIE_COLORS = ["#22c55e", "#f59e0b", "#3b82f6", "#a855f7", "#ef4444", "#06b6d4"];
-
+ 
     const [editGoal, setEditGoal] = useState(false);
     const [gForm, setGForm] = useState(goal);
-
+ 
     return React.createElement("div", { className: "fade-in" },
       React.createElement("div", { style: { ...S.card, background: netProfit >= 0 ? "#0a1a0a" : "#1a0a0a", border: "1px solid " + (netProfit >= 0 ? "#152a15" : "#2a1515"), textAlign: "center", padding: 24 } },
         React.createElement("div", { style: { fontSize: 11, letterSpacing: 2, color: netProfit >= 0 ? S.g : S.r, textTransform: "uppercase", fontWeight: 700, marginBottom: 4 } }, (netProfit >= 0 ? "✓ IN PROFIT" : "⚠ IN LOSS") + " — All Time"),
@@ -488,7 +494,7 @@ function App() {
         )
       ),
       // Charts
-      dailyData.length > 0 && React.createElement("div", { style: S.card },
+      hasCharts && dailyData.length > 0 && React.createElement("div", { style: S.card },
         React.createElement("div", { style: { fontSize: 11, color: "#737373", fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, "Daily Revenue vs Profit"),
         React.createElement(ResponsiveContainer, { width: "100%", height: 220 },
           React.createElement(BarChart, { data: dailyData, margin: { top: 5, right: 5, left: -10, bottom: 5 } },
@@ -502,7 +508,7 @@ function App() {
           )
         )
       ),
-      dailyData.length > 1 && (() => {
+      hasCharts && dailyData.length > 1 && (() => {
         let cum = 0;
         const cumData = dailyData.map(d => { cum += d.profit; return { date: d.date, cumProfit: Math.round(cum) }; });
         return React.createElement("div", { style: S.card },
@@ -518,7 +524,7 @@ function App() {
           )
         );
       })(),
-      pieData.length > 0 && React.createElement("div", { style: S.card },
+      hasCharts && pieData.length > 0 && React.createElement("div", { style: S.card },
         React.createElement("div", { style: { fontSize: 11, color: "#737373", fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, "Revenue by Product"),
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16 } },
           React.createElement(ResponsiveContainer, { width: "50%", height: 180 },
@@ -541,7 +547,7 @@ function App() {
       dailyLog.length === 0 && React.createElement("div", { style: { ...S.card, textAlign: "center", padding: 40, color: "#525252" } }, "Start logging daily data to see charts and goal progress.")
     );
   };
-
+ 
   // ===== SETTINGS =====
   const SettingsTab = () => {
     const [rForm, setRForm] = useState(rates);
@@ -581,7 +587,7 @@ function App() {
       )
     );
   };
-
+ 
   // ===== MAIN =====
   const tabs = [
     { id: "products", label: "Products", icon: "📦" },
@@ -590,7 +596,7 @@ function App() {
     { id: "overview", label: "Overview", icon: "📈" },
     { id: "settings", label: "Settings", icon: "⚙️" },
   ];
-
+ 
   return React.createElement("div", { style: S.page },
     React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, borderBottom: "1px solid #1a1a1a", paddingBottom: 16 } },
       React.createElement("div", null,
@@ -619,7 +625,7 @@ function App() {
     React.createElement("div", { style: { textAlign: "center", padding: "20px 0", marginTop: 24, borderTop: "1px solid #1a1a1a", fontSize: 10, color: "#1a1a1a", letterSpacing: 1 } }, "DARKMUSE TRACKER v1.0")
   );
 }
-
+ 
 ReactDOM.render(React.createElement(App), document.getElementById("root"));
 </script>
 </body>
