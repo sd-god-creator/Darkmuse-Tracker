@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DarkMuse — Business Tracker</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background: #0a0a0a; color: #e5e5e5; min-height: 100vh; }
+  input, select { font-family: inherit; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #111; }
+  ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+  input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-in { animation: fadeIn 0.3s ease; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.15.0/Recharts.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, LineChart, Line, Legend } = Recharts;
+
+const CURRENCIES = {
+  INR: { symbol: "₹", rate: 1 },
+  GBP: { symbol: "£", rate: 0.0091 },
+  USD: { symbol: "$", rate: 0.012 },
+  EUR: { symbol: "€", rate: 0.011 },
+};
+
+const KEYS = {
+  products: "dm-products",
+  dailyLog: "dm-dailylog",
+  goal: "dm-goal",
+  currency: "dm-currency",
+  rates: "dm-rates",
+};
+
+const load = (key, fallback) => {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+  catch { return fallback; }
+};
+const save = (key, val) => {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+};
+
+const fmt = (num, cur) => {
+  const c = CURRENCIES[cur] || CURRENCIES.INR;
+  const converted = num * c.rate;
+  return c.symbol + (Math.abs(converted) < 0.01 ? "0.00" : converted.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+};
+const fmtShort = (num, cur) => {
+  const c = CURRENCIES[cur] || CURRENCIES.INR;
+  const v = num * c.rate;
+  if (Math.abs(v) >= 100000) return c.symbol + (v / 100000).toFixed(1) + "L";
+  if (Math.abs(v) >= 1000) return c.symbol + (v / 1000).toFixed(1) + "K";
+  return c.symbol + v.toFixed(0);
+};
+
+const defaultProducts = [
+  { id: "p1", name: "Faux Leather Jacket", sku: "DM-FLJ-001", sellingPriceGBP: 78, cogsINR: 3300, active: true },
+];
+
+function App() {
+  const [tab, setTab] = useState("products");
+  const [currency, setCurrency] = useState(load(KEYS.currency, "INR"));
+  const [products, setProducts] = useState(load(KEYS.products, defaultProducts));
+  const [dailyLog, setDailyLog] = useState(load(KEYS.dailyLog, []));
+  const [goal, setGoal] = useState(load(KEYS.goal, { targetINR: 500000, targetDate: "2026-06-21", label: "Move-out fund" }));
+  const [rates, setRates] = useState(load(KEYS.rates, { GBP_INR: 110, USD_INR: 83, EUR_INR: 90 }));
+
+  const [ratesStatus, setRatesStatus] = useState(load("dm-rates-updated", "Never"));
+  const [ratesLoading, setRatesLoading] = useState(false);
+
+  useEffect(() => { CURRENCIES.GBP.rate = 1 / rates.GBP_INR; CURRENCIES.USD.rate = 1 / rates.USD_INR; CURRENCIES.EUR.rate = 1 / rates.EUR_INR; }, [rates]);
+
+  const fetchLiveRates = useCallback(async () => {
+    setRatesLoading(true);
+    try {
+      const res = await fetch("https://api.frankfurter.app/latest?from=INR&to=GBP,USD,EUR");
+      if (!res.ok) throw new Error("API failed");
+      const data = await res.json();
+      if (data.rates) {
+        const newRates = {
+          GBP_INR: data.rates.GBP ? Math.round(1 / data.rates.GBP * 100) / 100 : rates.GBP_INR,
+          USD_INR: data.rates.USD ? Math.round(1 / data.rates.USD * 100) / 100 : rates.USD_INR,
+          EUR_INR: data.rates.EUR ? Math.round(1 / data.rates.EUR * 100) / 100 : rates.EUR_INR,
+        };
+        setRates(newRates);
+        save(KEYS.rates, newRates);
+        const now = new Date().toLocaleString();
+        setRatesStatus(now);
+        save("dm-rates-updated", JSON.stringify(now));
+      }
+    } catch (err) {
+      console.log("Rate fetch failed, using stored rates:", err);
+    }
+    setRatesLoading(false);
+  }, []);
+
+  // Auto-fetch rates on load (max once per 6 hours)
+  useEffect(() => {
+    const lastFetch = load("dm-rates-timestamp", 0);
+    const sixHours = 6 * 60 * 60 * 1000;
+    if (Date.now() - lastFetch > sixHours) {
+      fetchLiveRates().then(() => save("dm-rates-timestamp", JSON.stringify(Date.now())));
+    }
+  }, []);
+
+  const saveProducts = (p) => { setProducts(p); save(KEYS.products, p); };
+  const saveLog = (l) => { setDailyLog(l); save(KEYS.dailyLog, l); };
+  const saveGoal = (g) => { setGoal(g); save(KEYS.goal, g); };
+  const saveCurrency = (c) => { setCurrency(c); save(KEYS.currency, c); };
+  const saveRates = (r) => { setRates(r); save(KEYS.rates, r); };
+
+  const toINR = (gbp) => gbp * rates.GBP_INR;
+
+  const computeDay = (entry) => {
+    let totalRevINR = 0, totalCOGS = 0, totalShipping = 0, totalUnits = 0;
+    const prodBreakdown = [];
+    (entry.sales || []).forEach(sl => {
+      const prod = products.find(p => p.id === sl.productId);
+      if (!prod) return;
+      const revINR = toINR(prod.sellingPriceGBP) * sl.qty;
+      const cogs = prod.cogsINR * sl.qty;
+      const ship = (sl.shippingINR || 0) * sl.qty;
+      totalRevINR += revINR; totalCOGS += cogs; totalShipping += ship; totalUnits += sl.qty;
+      prodBreakdown.push({ ...prod, qty: sl.qty, revINR, cogs, ship, grossProfit: revINR - cogs - ship, margin: revINR > 0 ? ((revINR - cogs - ship) / revINR * 100) : 0 });
+    });
+    const grossProfit = totalRevINR - totalCOGS - totalShipping;
+    const netProfit = grossProfit - (entry.adSpendINR || 0);
+    const trueROAS = entry.adSpendINR > 0 ? totalRevINR / entry.adSpendINR : 0;
+    const realROAS = entry.adSpendINR > 0 ? grossProfit / entry.adSpendINR : 0;
+    return { totalRevINR, totalCOGS, totalShipping, grossProfit, netProfit, trueROAS, realROAS, totalUnits, prodBreakdown, adSpend: entry.adSpendINR || 0 };
+  };
+
+  const S = {
+    page: { padding: "20px 16px", maxWidth: 800, margin: "0 auto" },
+    card: { background: "#111", border: "1px solid #1f1f1f", borderRadius: 8, padding: 16, marginBottom: 12 },
+    input: { background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: 4, padding: "8px 10px", color: "#e5e5e5", fontSize: 13, width: "100%", boxSizing: "border-box", outline: "none" },
+    btn: (c="#fff") => ({ background: c, color: c==="#fff"?"#000":"#fff", border: "none", borderRadius: 6, padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 0.5 }),
+    btnSm: (c="#222") => ({ background: c, color: "#999", border: "1px solid #333", borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer" }),
+    label: { fontSize: 10, color: "#525252", letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 },
+    metric: { fontSize: 20, fontWeight: 700, color: "#fff" },
+    sub: { fontSize: 11, color: "#525252", marginTop: 2 },
+    g: "#22c55e", r: "#ef4444", y: "#f59e0b", b: "#3b82f6",
+  };
+
+  // ===== PRODUCTS =====
+  const ProductsTab = () => {
+    const [editing, setEditing] = useState(null);
+    const [form, setForm] = useState({ name: "", sku: "", sellingPriceGBP: "", cogsINR: "" });
+    const startAdd = () => { setForm({ name: "", sku: "", sellingPriceGBP: "", cogsINR: "" }); setEditing("new"); };
+    const startEdit = (p) => { setForm({ name: p.name, sku: p.sku, sellingPriceGBP: p.sellingPriceGBP, cogsINR: p.cogsINR }); setEditing(p.id); };
+    const doSave = () => {
+      if (!form.name || !form.sellingPriceGBP || !form.cogsINR) return;
+      const prod = { id: editing === "new" ? "p" + Date.now() : editing, name: form.name, sku: form.sku, sellingPriceGBP: parseFloat(form.sellingPriceGBP), cogsINR: parseFloat(form.cogsINR), active: true };
+      if (editing === "new") saveProducts([...products, prod]);
+      else saveProducts(products.map(p => p.id === editing ? prod : p));
+      setEditing(null);
+    };
+    const remove = (id) => { if (confirm("Delete this product?")) saveProducts(products.filter(p => p.id !== id)); };
+
+    return React.createElement("div", { className: "fade-in" },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } },
+        React.createElement("div", { style: { fontSize: 11, letterSpacing: 2, color: "#737373", textTransform: "uppercase" } }, products.length + " Products"),
+        React.createElement("button", { onClick: startAdd, style: S.btn("#22c55e") }, "+ Add Product")
+      ),
+      editing && React.createElement("div", { style: { ...S.card, border: "1px solid #22c55e33" } },
+        React.createElement("div", { style: { fontSize: 11, color: "#22c55e", fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, editing === "new" ? "Add New Product" : "Edit Product"),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 } },
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Product Name"), React.createElement("input", { style: S.input, value: form.name, onChange: e => setForm({ ...form, name: e.target.value }), placeholder: "e.g. The Phantom Glasses" })),
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "SKU"), React.createElement("input", { style: S.input, value: form.sku, onChange: e => setForm({ ...form, sku: e.target.value }), placeholder: "e.g. DM-PHT-001" })),
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Selling Price (£ GBP)"), React.createElement("input", { style: S.input, type: "number", value: form.sellingPriceGBP, onChange: e => setForm({ ...form, sellingPriceGBP: e.target.value }), placeholder: "32" })),
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "COGS (₹ INR)"), React.createElement("input", { style: S.input, type: "number", value: form.cogsINR, onChange: e => setForm({ ...form, cogsINR: e.target.value }), placeholder: "450" }))
+        ),
+        form.sellingPriceGBP && form.cogsINR && React.createElement("div", { style: { background: "#0a0a0a", borderRadius: 6, padding: 12, marginBottom: 10 } },
+          React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 } },
+            React.createElement("div", null, React.createElement("div", { style: S.label }, "Selling (INR)"), React.createElement("div", { style: { fontSize: 13, color: "#fff", fontWeight: 600 } }, fmt(toINR(parseFloat(form.sellingPriceGBP)||0), "INR"))),
+            React.createElement("div", null, React.createElement("div", { style: S.label }, "Profit/Unit"), React.createElement("div", { style: { fontSize: 13, color: S.g, fontWeight: 600 } }, fmt(toINR(parseFloat(form.sellingPriceGBP)||0) - parseFloat(form.cogsINR||0), "INR"))),
+            React.createElement("div", null, React.createElement("div", { style: S.label }, "Margin"), React.createElement("div", { style: { fontSize: 13, color: S.g, fontWeight: 600 } }, ((toINR(parseFloat(form.sellingPriceGBP)||0) - parseFloat(form.cogsINR||0)) / toINR(parseFloat(form.sellingPriceGBP)||1) * 100).toFixed(1) + "%"))
+          )
+        ),
+        React.createElement("div", { style: { display: "flex", gap: 8 } },
+          React.createElement("button", { onClick: doSave, style: S.btn("#22c55e") }, "Save"),
+          React.createElement("button", { onClick: () => setEditing(null), style: S.btnSm() }, "Cancel")
+        )
+      ),
+      products.map(p => {
+        const revINR = toINR(p.sellingPriceGBP);
+        const profitUnit = revINR - p.cogsINR;
+        const margin = profitUnit / revINR * 100;
+        const breakEvenCPA = profitUnit;
+        const targetCPA = profitUnit * 0.4;
+        return React.createElement("div", { key: p.id, style: S.card },
+          React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 } },
+            React.createElement("div", null,
+              React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "#fff" } }, p.name),
+              React.createElement("div", { style: { fontSize: 11, color: "#525252" } }, "SKU: " + (p.sku || "—"))
+            ),
+            React.createElement("div", { style: { display: "flex", gap: 6 } },
+              React.createElement("button", { onClick: () => startEdit(p), style: S.btnSm() }, "Edit"),
+              React.createElement("button", { onClick: () => remove(p.id), style: S.btnSm("#1a0a0a") }, "Delete")
+            )
+          ),
+          React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 } },
+            [
+              { l: "Selling Price", v: fmt(revINR, currency), c: "#fff" },
+              { l: "COGS", v: fmt(p.cogsINR, currency), c: "#a3a3a3" },
+              { l: "Margin", v: margin.toFixed(1) + "%", c: margin > 50 ? S.g : margin > 30 ? S.y : S.r },
+              { l: "Profit/Unit", v: fmt(profitUnit, currency), c: profitUnit > 0 ? S.g : S.r },
+              { l: "Break-Even CPA", v: fmt(breakEvenCPA, currency), c: S.y },
+              { l: "Target CPA (40%)", v: fmt(targetCPA, currency), c: S.b },
+            ].map((m, i) => React.createElement("div", { key: i },
+              React.createElement("div", { style: S.label }, m.l),
+              React.createElement("div", { style: { fontSize: 13, color: m.c, fontWeight: 600 } }, m.v)
+            ))
+          )
+        );
+      })
+    );
+  };
+
+  // ===== DAILY LOG =====
+  const DailyLogTab = () => {
+    const [showForm, setShowForm] = useState(false);
+    const [form, setForm] = useState({ date: new Date().toISOString().split("T")[0], adSpendINR: "", sales: [] });
+
+    const addSale = () => setForm({ ...form, sales: [...form.sales, { productId: products[0]?.id || "", qty: 1, shippingINR: 0 }] });
+    const updateSale = (idx, field, val) => {
+      const sales = [...form.sales];
+      sales[idx] = { ...sales[idx], [field]: field === "productId" ? val : parseFloat(val) || 0 };
+      setForm({ ...form, sales });
+    };
+    const removeSale = (idx) => setForm({ ...form, sales: form.sales.filter((_, i) => i !== idx) });
+    const saveEntry = () => {
+      const entry = { id: "d" + Date.now(), date: form.date, adSpendINR: parseFloat(form.adSpendINR) || 0, sales: form.sales.filter(sl => sl.qty > 0) };
+      saveLog([...dailyLog, entry].sort((a, b) => b.date.localeCompare(a.date)));
+      setShowForm(false);
+      setForm({ date: new Date().toISOString().split("T")[0], adSpendINR: "", sales: [] });
+    };
+    const deleteEntry = (id) => { if (confirm("Delete this entry?")) saveLog(dailyLog.filter(e => e.id !== id)); };
+    const openForm = () => {
+      setShowForm(true);
+      setForm({ date: new Date().toISOString().split("T")[0], adSpendINR: "", sales: [{ productId: products[0]?.id || "", qty: 1, shippingINR: 0 }] });
+    };
+
+    const quickDates = [
+      { label: "Today", offset: 0 }, { label: "Yesterday", offset: 1 },
+      { label: "2 days ago", offset: 2 }, { label: "3 days ago", offset: 3 },
+      { label: "1 week ago", offset: 7 },
+    ];
+
+    return React.createElement("div", { className: "fade-in" },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } },
+        React.createElement("div", { style: { fontSize: 11, letterSpacing: 2, color: "#737373", textTransform: "uppercase" } }, dailyLog.length + " Entries"),
+        React.createElement("button", { onClick: openForm, style: S.btn("#f59e0b") }, "+ Log Entry")
+      ),
+      showForm && React.createElement("div", { style: { ...S.card, border: "1px solid #f59e0b33" } },
+        React.createElement("div", { style: { fontSize: 11, color: "#f59e0b", fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, "Log Entry — Select Any Date"),
+        React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" } },
+          quickDates.map(({ label, offset }) => {
+            const d = new Date(); d.setDate(d.getDate() - offset);
+            const ds = d.toISOString().split("T")[0];
+            return React.createElement("button", { key: offset, onClick: () => setForm({ ...form, date: ds }), style: {
+              background: form.date === ds ? "#f59e0b" : "#1a1a1a", color: form.date === ds ? "#000" : "#737373",
+              border: form.date === ds ? "none" : "1px solid #2a2a2a", borderRadius: 4, padding: "5px 10px", fontSize: 10, fontWeight: 600, cursor: "pointer",
+            } }, label);
+          })
+        ),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 } },
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Date (pick any date)"), React.createElement("input", { style: S.input, type: "date", value: form.date, onChange: e => setForm({ ...form, date: e.target.value }) })),
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Meta Ad Spend (₹ INR)"), React.createElement("input", { style: S.input, type: "number", value: form.adSpendINR, onChange: e => setForm({ ...form, adSpendINR: e.target.value }), placeholder: "2500" }))
+        ),
+        React.createElement("div", { style: { fontSize: 11, color: "#737373", letterSpacing: 1, textTransform: "uppercase", marginBottom: 8 } }, "Sales"),
+        form.sales.map((sl, i) => React.createElement("div", { key: i, style: { display: "grid", gridTemplateColumns: "2fr 1fr 1fr auto", gap: 8, marginBottom: 8, alignItems: "end" } },
+          React.createElement("div", null, React.createElement("div", { style: { ...S.label, fontSize: 9 } }, "Product"),
+            React.createElement("select", { style: { ...S.input, padding: "8px 6px" }, value: sl.productId, onChange: e => updateSale(i, "productId", e.target.value) },
+              products.map(p => React.createElement("option", { key: p.id, value: p.id }, p.name))
+            )),
+          React.createElement("div", null, React.createElement("div", { style: { ...S.label, fontSize: 9 } }, "Qty"), React.createElement("input", { style: S.input, type: "number", min: "1", value: sl.qty, onChange: e => updateSale(i, "qty", e.target.value) })),
+          React.createElement("div", null, React.createElement("div", { style: { ...S.label, fontSize: 9 } }, "Ship ₹/unit"), React.createElement("input", { style: S.input, type: "number", value: sl.shippingINR, onChange: e => updateSale(i, "shippingINR", e.target.value), placeholder: "0" })),
+          React.createElement("button", { onClick: () => removeSale(i), style: { ...S.btnSm("#1a0a0a"), padding: "8px", color: "#ef4444" } }, "✕")
+        )),
+        React.createElement("button", { onClick: addSale, style: { ...S.btnSm(), marginBottom: 14 } }, "+ Add Product Sale"),
+        form.adSpendINR && form.sales.length > 0 && (() => {
+          const pv = computeDay({ adSpendINR: parseFloat(form.adSpendINR) || 0, sales: form.sales });
+          return React.createElement("div", { style: { background: "#0a0a0a", borderRadius: 6, padding: 12, marginBottom: 12 } },
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 } },
+              [
+                { l: "Revenue", v: fmt(pv.totalRevINR, currency), c: "#fff" },
+                { l: "Gross Profit", v: fmt(pv.grossProfit, currency), c: pv.grossProfit >= 0 ? S.g : S.r },
+                { l: "Net Profit", v: fmt(pv.netProfit, currency), c: pv.netProfit >= 0 ? S.g : S.r },
+                { l: "True ROAS", v: pv.trueROAS.toFixed(2) + "x", c: "#fff" },
+                { l: "Real ROAS", v: pv.realROAS.toFixed(2) + "x", c: pv.realROAS >= 1 ? S.g : S.r },
+                { l: "Units", v: pv.totalUnits, c: "#fff" },
+              ].map((m, i) => React.createElement("div", { key: i }, React.createElement("div", { style: S.label }, m.l), React.createElement("div", { style: { fontSize: 13, color: m.c, fontWeight: 600 } }, m.v)))
+            )
+          );
+        })(),
+        React.createElement("div", { style: { display: "flex", gap: 8 } },
+          React.createElement("button", { onClick: saveEntry, style: S.btn("#f59e0b") }, "Save Entry"),
+          React.createElement("button", { onClick: () => setShowForm(false), style: S.btnSm() }, "Cancel")
+        )
+      ),
+      dailyLog.map(entry => {
+        const d = computeDay(entry);
+        return React.createElement("div", { key: entry.id, style: S.card },
+          React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } },
+            React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "#fff" } }, entry.date),
+            React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+              React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: d.netProfit >= 0 ? S.g : S.r } }, (d.netProfit >= 0 ? "PROFIT" : "LOSS") + ": " + fmt(d.netProfit, currency)),
+              React.createElement("button", { onClick: () => deleteEntry(entry.id), style: { ...S.btnSm("#1a0a0a"), color: "#ef4444", fontSize: 10 } }, "✕")
+            )
+          ),
+          React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 10 } },
+            [
+              { l: "Revenue", v: fmt(d.totalRevINR, currency), c: "#fff" },
+              { l: "Ad Spend", v: fmt(d.adSpend, currency), c: "#a3a3a3" },
+              { l: "True ROAS", v: d.trueROAS.toFixed(2) + "x", c: "#fff" },
+              { l: "Real ROAS", v: d.realROAS.toFixed(2) + "x", c: d.realROAS >= 1 ? S.g : S.r },
+            ].map((m, i) => React.createElement("div", { key: i }, React.createElement("div", { style: { ...S.label, fontSize: 9 } }, m.l), React.createElement("div", { style: { fontSize: 12, color: m.c } }, m.v)))
+          ),
+          d.prodBreakdown.length > 0 && React.createElement("div", { style: { background: "#0a0a0a", borderRadius: 6, padding: 10 } },
+            d.prodBreakdown.map((pb, i) => React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: i < d.prodBreakdown.length - 1 ? "1px solid #1a1a1a" : "none" } },
+              React.createElement("span", { style: { fontSize: 11, color: "#a3a3a3" } }, pb.name + " × " + pb.qty),
+              React.createElement("span", { style: { fontSize: 11, color: pb.grossProfit >= 0 ? S.g : S.r } }, fmt(pb.grossProfit, currency) + " (" + pb.margin.toFixed(0) + "%)")
+            ))
+          )
+        );
+      }),
+      dailyLog.length === 0 && !showForm && React.createElement("div", { style: { ...S.card, textAlign: "center", padding: 40, color: "#525252" } }, "No entries yet. Start logging daily to track your real profit.")
+    );
+  };
+
+  // ===== BREAK-EVEN =====
+  const BreakEvenTab = () => {
+    const [sel, setSel] = useState(products[0]?.id || "");
+    const [adSpend, setAdSpend] = useState("3000");
+    const [avgShip, setAvgShip] = useState("250");
+    const [dailySales, setDailySales] = useState("3");
+    const [targetProfit, setTargetProfit] = useState("500000");
+
+    const prod = products.find(p => p.id === sel);
+    if (!prod) return React.createElement("div", { style: { ...S.card, textAlign: "center", color: "#525252" } }, "Add products first.");
+
+    const revINR = toINR(prod.sellingPriceGBP);
+    const ppu = revINR - prod.cogsINR - (parseFloat(avgShip) || 0);
+    const ads = parseFloat(adSpend) || 0;
+    const ds = parseFloat(dailySales) || 0;
+    const tp = parseFloat(targetProfit) || 0;
+
+    const unitsBE = ppu > 0 ? Math.ceil(ads / ppu) : Infinity;
+    const maxCPA = ppu;
+    const maxDailyAd = ppu * ds;
+    const monthlyProfit = (ppu * ds * 30) - (ads * 30);
+    const dailyNeeded = ppu > 0 ? Math.ceil((tp + ads * 30) / (ppu * 30)) : Infinity;
+
+    return React.createElement("div", { className: "fade-in" },
+      React.createElement("div", { style: S.card },
+        React.createElement("div", { style: { fontSize: 11, color: S.b, fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, "Calculator Inputs"),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 } },
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Product"),
+            React.createElement("select", { style: S.input, value: sel, onChange: e => setSel(e.target.value) }, products.map(p => React.createElement("option", { key: p.id, value: p.id }, p.name)))),
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Daily Ad Spend (₹)"), React.createElement("input", { style: S.input, type: "number", value: adSpend, onChange: e => setAdSpend(e.target.value) })),
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Avg Shipping/Unit (₹)"), React.createElement("input", { style: S.input, type: "number", value: avgShip, onChange: e => setAvgShip(e.target.value) })),
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Current Daily Sales"), React.createElement("input", { style: S.input, type: "number", value: dailySales, onChange: e => setDailySales(e.target.value) }))
+        ),
+        React.createElement("div", null, React.createElement("div", { style: S.label }, "Monthly Profit Target (₹)"), React.createElement("input", { style: { ...S.input, maxWidth: 300 }, type: "number", value: targetProfit, onChange: e => setTargetProfit(e.target.value) }))
+      ),
+      React.createElement("div", { style: S.card },
+        React.createElement("div", { style: { fontSize: 11, color: "#737373", fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, prod.name + " — Unit Economics"),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8 } },
+          [
+            { l: "Selling", v: fmt(revINR, currency), c: "#fff" },
+            { l: "COGS", v: fmt(prod.cogsINR, currency), c: "#a3a3a3" },
+            { l: "Shipping", v: fmt(parseFloat(avgShip)||0, currency), c: "#a3a3a3" },
+            { l: "Profit/Unit", v: fmt(ppu, currency), c: ppu > 0 ? S.g : S.r },
+          ].map((m, i) => React.createElement("div", { key: i }, React.createElement("div", { style: S.label }, m.l), React.createElement("div", { style: { fontSize: 14, color: m.c, fontWeight: 700 } }, m.v)))
+        )
+      ),
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } },
+        [
+          { l: "Units to Break Even/Day", v: unitsBE === Infinity ? "∞" : unitsBE, sub: "At " + fmt(ads, "INR") + "/day ad spend", c: S.y },
+          { l: "Max CPA (Break-Even)", v: fmt(maxCPA, currency), sub: "Spend more = loss", c: S.r },
+          { l: "Max Daily Ad Spend", v: fmt(maxDailyAd, currency), sub: "At " + ds + " sales/day", c: S.g },
+          { l: "Monthly Profit (Current)", v: fmt(monthlyProfit, currency), sub: ds + " sales/day × 30 days", c: monthlyProfit >= 0 ? S.g : S.r },
+        ].map((m, i) => React.createElement("div", { key: i, style: { ...S.card, borderLeft: "3px solid " + m.c } },
+          React.createElement("div", { style: S.label }, m.l),
+          React.createElement("div", { style: { ...S.metric, color: m.c } }, m.v),
+          React.createElement("div", { style: S.sub }, m.sub)
+        ))
+      ),
+      React.createElement("div", { style: { ...S.card, border: "1px solid " + S.b + "33", marginTop: 12 } },
+        React.createElement("div", { style: { fontSize: 11, color: S.b, fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, "Path to " + fmt(tp, "INR") + "/month Profit"),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } },
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Daily Sales Needed"), React.createElement("div", { style: { fontSize: 20, fontWeight: 700, color: "#fff" } }, (dailyNeeded === Infinity ? "∞" : dailyNeeded) + "/day")),
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Monthly Revenue Needed"), React.createElement("div", { style: { fontSize: 20, fontWeight: 700, color: "#fff" } }, fmt(revINR * dailyNeeded * 30, currency)))
+        )
+      )
+    );
+  };
+
+  // ===== OVERVIEW =====
+  const OverviewTab = () => {
+    let totalRev = 0, totalCOGS = 0, totalShip = 0, totalAdSpend = 0, totalUnits = 0;
+    const dailyData = [];
+    const productTotals = {};
+
+    [...dailyLog].sort((a, b) => a.date.localeCompare(b.date)).forEach(entry => {
+      const d = computeDay(entry);
+      totalRev += d.totalRevINR; totalCOGS += d.totalCOGS; totalShip += d.totalShipping;
+      totalAdSpend += d.adSpend; totalUnits += d.totalUnits;
+      dailyData.push({ date: entry.date.slice(5), revenue: Math.round(d.totalRevINR), profit: Math.round(d.netProfit), adSpend: Math.round(d.adSpend) });
+      d.prodBreakdown.forEach(pb => {
+        if (!productTotals[pb.id]) productTotals[pb.id] = { name: pb.name, units: 0, revenue: 0, profit: 0 };
+        productTotals[pb.id].units += pb.qty; productTotals[pb.id].revenue += pb.revINR; productTotals[pb.id].profit += pb.grossProfit;
+      });
+    });
+
+    const grossProfit = totalRev - totalCOGS - totalShip;
+    const netProfit = grossProfit - totalAdSpend;
+    const trueROAS = totalAdSpend > 0 ? totalRev / totalAdSpend : 0;
+    const realROAS = totalAdSpend > 0 ? grossProfit / totalAdSpend : 0;
+    const profitMargin = totalRev > 0 ? (netProfit / totalRev * 100) : 0;
+    const daysLogged = dailyLog.length;
+    const avgDaily = daysLogged > 0 ? netProfit / daysLogged : 0;
+    const projMonthly = avgDaily * 30;
+    const goalProg = goal.targetINR > 0 ? Math.min((projMonthly / goal.targetINR) * 100, 100) : 0;
+    const daysLeft = Math.max(0, Math.ceil((new Date(goal.targetDate) - new Date()) / 86400000));
+
+    const pieData = Object.values(productTotals).map(p => ({ name: p.name, value: Math.round(p.revenue) }));
+    const PIE_COLORS = ["#22c55e", "#f59e0b", "#3b82f6", "#a855f7", "#ef4444", "#06b6d4"];
+
+    const [editGoal, setEditGoal] = useState(false);
+    const [gForm, setGForm] = useState(goal);
+
+    return React.createElement("div", { className: "fade-in" },
+      React.createElement("div", { style: { ...S.card, background: netProfit >= 0 ? "#0a1a0a" : "#1a0a0a", border: "1px solid " + (netProfit >= 0 ? "#152a15" : "#2a1515"), textAlign: "center", padding: 24 } },
+        React.createElement("div", { style: { fontSize: 11, letterSpacing: 2, color: netProfit >= 0 ? S.g : S.r, textTransform: "uppercase", fontWeight: 700, marginBottom: 4 } }, (netProfit >= 0 ? "✓ IN PROFIT" : "⚠ IN LOSS") + " — All Time"),
+        React.createElement("div", { style: { fontSize: 32, fontWeight: 800, color: netProfit >= 0 ? S.g : S.r } }, fmt(netProfit, currency)),
+        React.createElement("div", { style: { fontSize: 12, color: "#737373", marginTop: 4 } }, "Net Profit · " + totalUnits + " units · " + daysLogged + " days tracked")
+      ),
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8, marginBottom: 12 } },
+        [
+          { l: "Total Revenue", v: fmt(totalRev, currency), c: "#fff" },
+          { l: "Total COGS + Ship", v: fmt(totalCOGS + totalShip, currency), c: "#a3a3a3" },
+          { l: "Total Ad Spend", v: fmt(totalAdSpend, currency), c: "#a3a3a3" },
+          { l: "Gross Profit", v: fmt(grossProfit, currency), c: grossProfit >= 0 ? S.g : S.r },
+          { l: "True ROAS", v: trueROAS.toFixed(2) + "x", c: "#fff" },
+          { l: "Real ROAS", v: realROAS.toFixed(2) + "x", c: realROAS >= 1 ? S.g : S.r },
+          { l: "Net Margin", v: profitMargin.toFixed(1) + "%", c: profitMargin > 0 ? S.g : S.r },
+          { l: "Avg Profit/Day", v: fmt(avgDaily, currency), c: avgDaily >= 0 ? S.g : S.r },
+        ].map((m, i) => React.createElement("div", { key: i, style: S.card },
+          React.createElement("div", { style: S.label }, m.l),
+          React.createElement("div", { style: { fontSize: 16, fontWeight: 700, color: m.c } }, m.v)
+        ))
+      ),
+      // Goal
+      React.createElement("div", { style: { ...S.card, border: "1px solid #3b82f622" } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
+          React.createElement("div", { style: { fontSize: 11, color: S.b, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" } }, "🎯 Goal: " + goal.label),
+          React.createElement("button", { onClick: () => { setEditGoal(!editGoal); setGForm(goal); }, style: S.btnSm() }, editGoal ? "Cancel" : "Edit Goal")
+        ),
+        editGoal ? React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 } },
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Target (₹/mo)"), React.createElement("input", { style: S.input, type: "number", value: gForm.targetINR, onChange: e => setGForm({ ...gForm, targetINR: parseFloat(e.target.value) || 0 }) })),
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Target Date"), React.createElement("input", { style: S.input, type: "date", value: gForm.targetDate, onChange: e => setGForm({ ...gForm, targetDate: e.target.value }) })),
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "Label"), React.createElement("input", { style: S.input, value: gForm.label, onChange: e => setGForm({ ...gForm, label: e.target.value }) })),
+          React.createElement("button", { onClick: () => { saveGoal(gForm); setEditGoal(false); }, style: S.btn(S.b) }, "Save Goal")
+        ) : React.createElement("div", null,
+          React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 14 } },
+            React.createElement("div", null, React.createElement("div", { style: S.label }, "Target"), React.createElement("div", { style: { fontSize: 16, fontWeight: 700, color: "#fff" } }, fmt(goal.targetINR, currency) + "/mo")),
+            React.createElement("div", null, React.createElement("div", { style: S.label }, "Projected"), React.createElement("div", { style: { fontSize: 16, fontWeight: 700, color: projMonthly >= goal.targetINR ? S.g : S.y } }, fmt(projMonthly, currency) + "/mo")),
+            React.createElement("div", null, React.createElement("div", { style: S.label }, "Days Left"), React.createElement("div", { style: { fontSize: 16, fontWeight: 700, color: "#fff" } }, daysLeft))
+          ),
+          React.createElement("div", { style: { marginBottom: 4, display: "flex", justifyContent: "space-between" } },
+            React.createElement("span", { style: { fontSize: 11, color: "#737373" } }, "Progress"),
+            React.createElement("span", { style: { fontSize: 11, color: goalProg >= 100 ? S.g : S.y, fontWeight: 700 } }, goalProg.toFixed(0) + "%")
+          ),
+          React.createElement("div", { style: { width: "100%", height: 12, background: "#1a1a1a", borderRadius: 6, overflow: "hidden" } },
+            React.createElement("div", { style: { width: goalProg + "%", height: "100%", borderRadius: 6, background: goalProg >= 100 ? S.g : goalProg >= 60 ? S.y : S.r, transition: "width 0.5s" } })
+          )
+        )
+      ),
+      // Charts
+      dailyData.length > 0 && React.createElement("div", { style: S.card },
+        React.createElement("div", { style: { fontSize: 11, color: "#737373", fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, "Daily Revenue vs Profit"),
+        React.createElement(ResponsiveContainer, { width: "100%", height: 220 },
+          React.createElement(BarChart, { data: dailyData, margin: { top: 5, right: 5, left: -10, bottom: 5 } },
+            React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#1a1a1a" }),
+            React.createElement(XAxis, { dataKey: "date", tick: { fontSize: 10, fill: "#525252" } }),
+            React.createElement(YAxis, { tick: { fontSize: 10, fill: "#525252" }, tickFormatter: v => fmtShort(v, "INR") }),
+            React.createElement(Tooltip, { contentStyle: { background: "#111", border: "1px solid #2a2a2a", borderRadius: 6, fontSize: 12 }, formatter: v => [fmt(v, "INR"), ""] }),
+            React.createElement(Bar, { dataKey: "revenue", fill: "#3b82f6", radius: [3,3,0,0], name: "Revenue" }),
+            React.createElement(Bar, { dataKey: "profit", fill: "#22c55e", radius: [3,3,0,0], name: "Net Profit" }),
+            React.createElement(Legend, { wrapperStyle: { fontSize: 10 } })
+          )
+        )
+      ),
+      dailyData.length > 1 && (() => {
+        let cum = 0;
+        const cumData = dailyData.map(d => { cum += d.profit; return { date: d.date, cumProfit: Math.round(cum) }; });
+        return React.createElement("div", { style: S.card },
+          React.createElement("div", { style: { fontSize: 11, color: "#737373", fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, "Cumulative Net Profit"),
+          React.createElement(ResponsiveContainer, { width: "100%", height: 180 },
+            React.createElement(LineChart, { data: cumData, margin: { top: 5, right: 5, left: -10, bottom: 5 } },
+              React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#1a1a1a" }),
+              React.createElement(XAxis, { dataKey: "date", tick: { fontSize: 10, fill: "#525252" } }),
+              React.createElement(YAxis, { tick: { fontSize: 10, fill: "#525252" }, tickFormatter: v => fmtShort(v, "INR") }),
+              React.createElement(Tooltip, { contentStyle: { background: "#111", border: "1px solid #2a2a2a", borderRadius: 6, fontSize: 12 }, formatter: v => [fmt(v, "INR"), "Cumulative"] }),
+              React.createElement(Line, { type: "monotone", dataKey: "cumProfit", stroke: S.g, strokeWidth: 2, dot: { fill: S.g, r: 3 } })
+            )
+          )
+        );
+      })(),
+      pieData.length > 0 && React.createElement("div", { style: S.card },
+        React.createElement("div", { style: { fontSize: 11, color: "#737373", fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, "Revenue by Product"),
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16 } },
+          React.createElement(ResponsiveContainer, { width: "50%", height: 180 },
+            React.createElement(PieChart, null,
+              React.createElement(Pie, { data: pieData, cx: "50%", cy: "50%", innerRadius: 40, outerRadius: 70, dataKey: "value", stroke: "none" },
+                pieData.map((_, i) => React.createElement(Cell, { key: i, fill: PIE_COLORS[i % PIE_COLORS.length] }))
+              ),
+              React.createElement(Tooltip, { contentStyle: { background: "#111", border: "1px solid #2a2a2a", borderRadius: 6, fontSize: 12 }, formatter: v => [fmt(v, currency)] })
+            )
+          ),
+          React.createElement("div", { style: { flex: 1 } },
+            pieData.map((p, i) => React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
+              React.createElement("div", { style: { width: 10, height: 10, borderRadius: 2, background: PIE_COLORS[i % PIE_COLORS.length], flexShrink: 0 } }),
+              React.createElement("span", { style: { fontSize: 11, color: "#a3a3a3", flex: 1 } }, p.name),
+              React.createElement("span", { style: { fontSize: 11, color: "#fff", fontWeight: 600 } }, fmt(p.value, currency))
+            ))
+          )
+        )
+      ),
+      dailyLog.length === 0 && React.createElement("div", { style: { ...S.card, textAlign: "center", padding: 40, color: "#525252" } }, "Start logging daily data to see charts and goal progress.")
+    );
+  };
+
+  // ===== SETTINGS =====
+  const SettingsTab = () => {
+    const [rForm, setRForm] = useState(rates);
+    return React.createElement("div", { className: "fade-in" },
+      // Auto-fetch status
+      React.createElement("div", { style: { ...S.card, border: "1px solid #22c55e22" } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
+          React.createElement("div", { style: { fontSize: 11, color: S.g, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" } }, "🔄 Live Exchange Rates"),
+          React.createElement("button", { onClick: () => fetchLiveRates().then(() => { save("dm-rates-timestamp", JSON.stringify(Date.now())); setRForm(rates); }), style: { ...S.btn(S.g), opacity: ratesLoading ? 0.5 : 1 } }, ratesLoading ? "Fetching..." : "Refresh Now")
+        ),
+        React.createElement("div", { style: { fontSize: 12, color: "#a3a3a3", marginBottom: 10 } }, "Rates auto-update every 6 hours when you open the tracker. Source: European Central Bank via Frankfurter API."),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 8 } },
+          React.createElement("div", { style: { background: "#0a0a0a", borderRadius: 6, padding: "10px 12px" } }, React.createElement("div", { style: S.label }, "1 GBP"), React.createElement("div", { style: { fontSize: 16, fontWeight: 700, color: "#fff" } }, "₹" + rates.GBP_INR.toFixed(2))),
+          React.createElement("div", { style: { background: "#0a0a0a", borderRadius: 6, padding: "10px 12px" } }, React.createElement("div", { style: S.label }, "1 USD"), React.createElement("div", { style: { fontSize: 16, fontWeight: 700, color: "#fff" } }, "₹" + rates.USD_INR.toFixed(2))),
+          React.createElement("div", { style: { background: "#0a0a0a", borderRadius: 6, padding: "10px 12px" } }, React.createElement("div", { style: S.label }, "1 EUR"), React.createElement("div", { style: { fontSize: 16, fontWeight: 700, color: "#fff" } }, "₹" + rates.EUR_INR.toFixed(2)))
+        ),
+        React.createElement("div", { style: { fontSize: 10, color: "#525252" } }, "Last updated: " + (typeof ratesStatus === "string" ? ratesStatus : "Never"))
+      ),
+      // Manual override
+      React.createElement("div", { style: S.card },
+        React.createElement("div", { style: { fontSize: 11, color: "#737373", fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, "Manual Override"),
+        React.createElement("div", { style: { fontSize: 12, color: "#525252", marginBottom: 10 } }, "Override auto-rates if needed. Will be replaced next time auto-fetch runs."),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 10 } },
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "1 GBP = ₹"), React.createElement("input", { style: S.input, type: "number", value: rForm.GBP_INR, onChange: e => setRForm({ ...rForm, GBP_INR: parseFloat(e.target.value) || 110 }) })),
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "1 USD = ₹"), React.createElement("input", { style: S.input, type: "number", value: rForm.USD_INR, onChange: e => setRForm({ ...rForm, USD_INR: parseFloat(e.target.value) || 83 }) })),
+          React.createElement("div", null, React.createElement("div", { style: S.label }, "1 EUR = ₹"), React.createElement("input", { style: S.input, type: "number", value: rForm.EUR_INR, onChange: e => setRForm({ ...rForm, EUR_INR: parseFloat(e.target.value) || 90 }) }))
+        ),
+        React.createElement("button", { onClick: () => saveRates(rForm), style: S.btn(S.b) }, "Update Rates Manually")
+      ),
+      React.createElement("div", { style: S.card },
+        React.createElement("div", { style: { fontSize: 11, color: S.r, fontWeight: 700, letterSpacing: 1, marginBottom: 12, textTransform: "uppercase" } }, "Data Management"),
+        React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+          React.createElement("button", { onClick: () => { if (confirm("Export all data as JSON?")) { const d = { products, dailyLog, goal, rates }; const b = new Blob([JSON.stringify(d, null, 2)], { type: "application/json" }); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "darkmuse-tracker-backup.json"; a.click(); } }, style: S.btn("#3b82f6") }, "Export Data"),
+          React.createElement("button", { onClick: () => { const inp = document.createElement("input"); inp.type = "file"; inp.accept = ".json"; inp.onchange = (e) => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = (ev) => { try { const d = JSON.parse(ev.target.result); if (d.products) saveProducts(d.products); if (d.dailyLog) saveLog(d.dailyLog); if (d.goal) saveGoal(d.goal); if (d.rates) saveRates(d.rates); alert("Data imported!"); } catch { alert("Invalid file"); } }; r.readAsText(f); }; inp.click(); } }, style: S.btn("#f59e0b") }, "Import Data"),
+          React.createElement("button", { onClick: () => { if (confirm("⚠️ This will delete ALL data. Are you sure?")) { Object.values(KEYS).forEach(k => localStorage.removeItem(k)); localStorage.removeItem("dm-rates-updated"); localStorage.removeItem("dm-rates-timestamp"); location.reload(); } }, style: S.btn(S.r) }, "Reset All Data")
+        )
+      )
+    );
+  };
+
+  // ===== MAIN =====
+  const tabs = [
+    { id: "products", label: "Products", icon: "📦" },
+    { id: "log", label: "Daily Log", icon: "📊" },
+    { id: "breakeven", label: "Break-Even", icon: "🎯" },
+    { id: "overview", label: "Overview", icon: "📈" },
+    { id: "settings", label: "Settings", icon: "⚙️" },
+  ];
+
+  return React.createElement("div", { style: S.page },
+    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, borderBottom: "1px solid #1a1a1a", paddingBottom: 16 } },
+      React.createElement("div", null,
+        React.createElement("div", { style: { fontSize: 10, letterSpacing: 4, color: "#525252", textTransform: "uppercase" } }, "DarkMuse × Sd Dropouts"),
+        React.createElement("h1", { style: { fontSize: 20, fontWeight: 700, color: "#fff", margin: "4px 0 0" } }, "Business Tracker")
+      ),
+      React.createElement("div", { style: { display: "flex", gap: 4, background: "#111", borderRadius: 6, padding: 3 } },
+        ["INR", "GBP", "USD", "EUR"].map(c => React.createElement("button", { key: c, onClick: () => saveCurrency(c), style: {
+          background: currency === c ? "#fff" : "transparent", color: currency === c ? "#000" : "#525252",
+          border: "none", borderRadius: 4, padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+        } }, c))
+      )
+    ),
+    React.createElement("div", { style: { display: "flex", gap: 4, marginBottom: 20, overflowX: "auto" } },
+      tabs.map(t => React.createElement("button", { key: t.id, onClick: () => setTab(t.id), style: {
+        background: tab === t.id ? "#1f1f1f" : "transparent", color: tab === t.id ? "#fff" : "#525252",
+        border: tab === t.id ? "1px solid #333" : "1px solid transparent", borderRadius: 6, padding: "8px 14px",
+        fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6,
+      } }, React.createElement("span", { style: { fontSize: 14 } }, t.icon), t.label))
+    ),
+    tab === "products" && React.createElement(ProductsTab, null),
+    tab === "log" && React.createElement(DailyLogTab, null),
+    tab === "breakeven" && React.createElement(BreakEvenTab, null),
+    tab === "overview" && React.createElement(OverviewTab, null),
+    tab === "settings" && React.createElement(SettingsTab, null),
+    React.createElement("div", { style: { textAlign: "center", padding: "20px 0", marginTop: 24, borderTop: "1px solid #1a1a1a", fontSize: 10, color: "#1a1a1a", letterSpacing: 1 } }, "DARKMUSE TRACKER v1.0")
+  );
+}
+
+ReactDOM.render(React.createElement(App), document.getElementById("root"));
+</script>
+</body>
+</html>
